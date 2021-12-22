@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"log"
 	"math/big"
+	"net"
 	"os"
 	"time"
 )
@@ -130,54 +131,6 @@ func setDifficulty(difficultyIndex int) *big.Int {
 	return difficulty
 }
 
-func createGenesisBlock(someRandomData []byte, bitshift uint8) block {
-	genesisDataHash := hashData(someRandomData)
-	return block{
-		blockHeader: blockHeader{
-			Timestamp:    time.Now().Unix(),
-			PreviousHash: *new([32]byte),
-			DataHash:     genesisDataHash,
-			BitShift:     bitshift,
-			Nonce:        0,
-		},
-		Data: someRandomData,
-	}
-
-}
-
-func start() {
-	// Create genesis Block
-	someRandomData := []byte("Let's Go!")
-	genesisBlock := createGenesisBlock(someRandomData, 15)
-
-	// Create the difficultyBigInt
-	difficultyBigInt := calculateDifficulty(genesisBlock.BitShift) // [0, 32)
-
-	// Initialize the  blockchain in memory
-	blockchain := []block{genesisBlock}
-
-	// Start mining
-	previousHash := genesisBlock.hash()
-	for {
-		logger.Printf("Blockchain length: %d", len(blockchain))
-		var nonce uint64 = 0
-		start := time.Now().UnixNano()
-		for {
-			block := newBlock(previousHash, someRandomData, genesisBlock.BitShift, nonce)
-			blockHash := block.hash()
-			valueDifference := compareBigInt(blockHash, difficultyBigInt)
-			if valueDifference < 0 {
-				blockchain = append(blockchain, block)
-				previousHash = blockHash
-				break
-			}
-			nonce++
-		}
-		elapsed := float64(time.Now().UnixNano() - start)
-		logger.Printf("Took: %f seconds\n", elapsed/1000000000.0)
-	}
-}
-
 func calculateDifficulty(bitShift uint8) *big.Int {
 	difficultyBytes := new([32]byte)
 	difficultyBytes[0] = 1
@@ -187,9 +140,101 @@ func calculateDifficulty(bitShift uint8) *big.Int {
 	difficulty.Rsh(difficulty, uint(bitShift))
 
 	return difficulty
+}
 
+func p2p() error {
+	port := os.Args[1]
+	peers := make([]net.Conn, 0)
+
+	peerHandler := func(c net.Conn) {
+		for {
+			buf := make([]byte, 512)
+			if _, err := c.Read(buf); err != nil {
+				logger.Println("Failed to read from peer: " + err.Error())
+				c.Close()
+				return
+			}
+			logger.Println("Received block from peer")
+		}
+	}
+
+	if len(os.Args) > 2 {
+		// First connect
+		peerAddr := os.Args[2]
+		if conn, err := net.Dial("tcp", peerAddr); err == nil {
+			logger.Println("Successfully connected to " + peerAddr)
+			peers = append(peers, conn)
+			go peerHandler(conn)
+		} else {
+			logger.Println("Unable to connect to peer: ", peerAddr)
+		}
+	}
+
+	// Then listen
+	listener, err := net.Listen("tcp", "localhost:"+port)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	logger.Println("Listening on port 8331...")
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				continue
+			}
+			logger.Printf("Peer %s connected", conn.RemoteAddr().String())
+			peers = append(peers, conn)
+			go peerHandler(conn)
+		}
+	}()
+
+	// Create genesis Block
+	someRandomData := []byte("Let's Go!")
+
+	// Create the difficultyBigInt
+	var bitshift uint8 = 16
+	difficultyBigInt := calculateDifficulty(bitshift) // [0, 32)
+
+	// Initialize the  blockchain in memory
+	blockchain := []block{}
+
+	// Start mining
+	logger.Println("Mining...")
+	previousHash := *new([32]byte)
+	var nonce uint64 = 0
+	start := time.Now().UnixNano()
+	for {
+		select {
+		default:
+			block := newBlock(previousHash, someRandomData, bitshift, nonce)
+			blockHash := block.hash()
+			valueDifference := compareBigInt(blockHash, difficultyBigInt)
+			if valueDifference < 0 {
+				blockchain = append(blockchain, block)
+				previousHash = blockHash
+				end := time.Now().UnixNano()
+				elapsed := float64(end - start)
+				start = end
+				logger.Printf("Block #%d took: %f seconds", len(blockchain), elapsed/1000000000.0)
+
+				// Distribute to peers
+				for _, peer := range peers {
+					blockBuf := block.serialize()
+					if _, err := peer.Write(blockBuf); err != nil {
+						logger.Println("Failed to send block to peer: " + err.Error())
+					}
+					logger.Println("Sent block to peer")
+				}
+			} else {
+				nonce++
+			}
+		}
+	}
 }
 
 func main() {
-	start()
+	p2p()
 }
