@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"log"
 	"math/big"
 	"net"
@@ -142,9 +143,42 @@ func calculateDifficulty(bitShift uint8) *big.Int {
 	return difficulty
 }
 
+func validateBlock(candidate block, previousHash [32]byte, bitshift uint8, difficultyBigInt *big.Int) bool {
+	// Timestamp
+	if candidate.blockHeader.Timestamp >= time.Now().UnixNano() {
+		return false
+	}
+
+	// Previous hash
+	if candidate.blockHeader.PreviousHash != previousHash {
+		return false
+	}
+
+	// Data hash
+	dataHash := hashData(candidate.Data)
+	if candidate.blockHeader.DataHash != dataHash {
+		return false
+	}
+
+	// Bit shift
+	if candidate.blockHeader.BitShift != bitshift {
+		return false
+	}
+
+	// Compare hash to difficulty
+	blockHash := candidate.blockHeader.hash()
+	valueDifference := compareBigInt(blockHash, difficultyBigInt)
+	if valueDifference >= 0 {
+		return false
+	}
+
+	return true
+}
+
 func p2p() error {
 	port := os.Args[1]
 	peers := make([]net.Conn, 0)
+	newBlockChannel := make(chan block)
 
 	peerHandler := func(c net.Conn) {
 		for {
@@ -154,7 +188,8 @@ func p2p() error {
 				c.Close()
 				return
 			}
-			logger.Println("Received block from peer")
+			block := deserialize(buf)
+			newBlockChannel <- block
 		}
 	}
 
@@ -208,17 +243,37 @@ func p2p() error {
 	start := time.Now().UnixNano()
 	for {
 		select {
+		case candidateBlock := <-newBlockChannel:
+			blockHash := candidateBlock.blockHeader.hash()
+			// TODO: Validate that block is good
+
+			// Append to blockchain
+			blockchain = append(blockchain, candidateBlock)
+
+			// Reset dynamic values
+			previousHash = blockHash
+			nonce = 0
+			start = time.Now().UnixNano()
+
+			logger.Printf("Block #%d, %s received", len(blockchain), hex.EncodeToString(blockHash[:]))
+
 		default:
 			block := newBlock(previousHash, someRandomData, bitshift, nonce)
 			blockHash := block.hash()
 			valueDifference := compareBigInt(blockHash, difficultyBigInt)
 			if valueDifference < 0 {
+
+				// Append to blockchain
 				blockchain = append(blockchain, block)
-				previousHash = blockHash
+
+				// Metrics
 				end := time.Now().UnixNano()
 				elapsed := float64(end - start)
+
+				// Reset dynamic values
+				previousHash = blockHash
+				nonce = 0
 				start = end
-				logger.Printf("Block #%d took: %f seconds", len(blockchain), elapsed/1000000000.0)
 
 				// Distribute to peers
 				for _, peer := range peers {
@@ -226,8 +281,9 @@ func p2p() error {
 					if _, err := peer.Write(blockBuf); err != nil {
 						logger.Println("Failed to send block to peer: " + err.Error())
 					}
-					logger.Println("Sent block to peer")
 				}
+
+				logger.Printf("Block #%d, %s mined in %f seconds", len(blockchain), hex.EncodeToString(blockHash[:]), elapsed/1000000000.0)
 			} else {
 				nonce++
 			}
