@@ -31,8 +31,15 @@ func TestSerialization(t *testing.T) {
 func TestValidate(t *testing.T) {
 	previousHash := *new([32]byte)
 	data := []byte("test data")
-	var bitshift uint8 = 5
+	var bitshift uint8 = 0
+	difficultyBigInt := util.CalculateDifficulty(bitshift)
+
 	block := NewBlock(previousHash, data, bitshift, 0)
+	blockHash := block.Header.Hash()
+	for util.CompareBigInt(blockHash, difficultyBigInt) >= 0 {
+		block.Header.Nonce++
+		blockHash = block.Header.Hash()
+	}
 	if !ValidateBlock(block, previousHash, bitshift) {
 		t.Errorf("Expected valid block")
 	}

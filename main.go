@@ -100,6 +100,7 @@ func run() error {
 	previousHash := *new([32]byte)
 	var nonce uint64 = 0
 	start := time.Now().UnixNano()
+
 	for {
 		select {
 		case unsyncdPeer := <-chainSyncChannel:
@@ -111,6 +112,9 @@ func run() error {
 		case candidateBlock := <-blockChannel:
 			blockHash := candidateBlock.Header.Hash()
 			// TODO: Validate that block is good
+			if !block.ValidateBlock(candidateBlock, previousHash, bitshift) {
+				break
+			}
 
 			// Append to blockchain
 			blockchain = append(blockchain, candidateBlock)
