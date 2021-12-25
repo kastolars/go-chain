@@ -2,7 +2,6 @@ package block
 
 import (
 	"encoding/binary"
-	"math/big"
 	"time"
 
 	"go-chain/util"
@@ -116,7 +115,7 @@ func NewBlock(previousHash [32]byte, data []byte, bitshift uint8, nonce uint64) 
 	}
 }
 
-func ValidateBlock(candidate Block, previousHash [32]byte, bitshift uint8, difficultyBigInt *big.Int) bool {
+func ValidateBlock(candidate Block, previousHash [32]byte, bitshift uint8) bool {
 	// Timestamp
 	if candidate.Header.Timestamp >= time.Now().UnixNano() {
 		return false
@@ -139,6 +138,7 @@ func ValidateBlock(candidate Block, previousHash [32]byte, bitshift uint8, diffi
 	}
 
 	// Compare hash to difficulty
+	difficultyBigInt := util.CalculateDifficulty(bitshift)
 	blockHash := candidate.Header.Hash()
 	valueDifference := util.CompareBigInt(blockHash, difficultyBigInt)
 	if valueDifference >= 0 {

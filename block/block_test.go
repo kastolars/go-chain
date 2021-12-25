@@ -27,3 +27,13 @@ func TestSerialization(t *testing.T) {
 		t.Errorf("Nonces do not match; wanted %d got %d", block.Header.Nonce, deserializedBlock.Header.Nonce)
 	}
 }
+
+func TestValidate(t *testing.T) {
+	previousHash := *new([32]byte)
+	data := []byte("test data")
+	var bitshift uint8 = 5
+	block := NewBlock(previousHash, data, bitshift, 0)
+	if !ValidateBlock(block, previousHash, bitshift) {
+		t.Errorf("Expected valid block")
+	}
+}

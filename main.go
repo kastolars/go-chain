@@ -47,10 +47,10 @@ func run() error {
 			peers = append(peers, p)
 
 			// Sync chains
-			// TODO: Chain sync must be synchronous
-			if err := p2p.SendChainSync(conn); err != nil {
+			if err := p2p.SendChainSyncRequest(conn); err != nil {
 				conn.Close()
 			} else {
+				// TODO: Chain sync must be synchronous
 				go peerHandler(p, peers, &peersLock)
 			}
 		} else {

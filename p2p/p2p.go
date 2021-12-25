@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	MSG_HANDSHAKE  = 0
-	MSG_BLOCK      = 1
-	MSG_CHAIN_SYNC = 2
+	MSG_BLOCK              = 1
+	MSG_REQUEST_CHAIN_SYNC = 2
 )
 
 type Peer struct {
@@ -29,8 +28,8 @@ func SendBlock(conn net.Conn, bl block.Block) error {
 	return err
 }
 
-func SendChainSync(conn net.Conn) error {
-	messageBuf := []byte{MSG_CHAIN_SYNC}
+func SendChainSyncRequest(conn net.Conn) error {
+	messageBuf := []byte{MSG_REQUEST_CHAIN_SYNC}
 	_, err := conn.Write(messageBuf)
 	return err
 }
@@ -68,17 +67,21 @@ func HandlePeer(peer Peer, peers []Peer, peersLock *sync.Mutex) {
 	}()
 
 	for {
+
+		// Read in the message type
 		messageTypeBuf := make([]byte, 1)
 		if _, err := peer.C.Read(messageTypeBuf); err != nil {
 			return
 		}
+
+		// Handle based on type
 		switch messageTypeBuf[0] {
 		case MSG_BLOCK:
 			if err := handleBlock(peer.C, peer.BlockChannel); err != nil {
 				util.GoChainLogger.Println("Failed to read from peer: " + err.Error())
 				return
 			}
-		case MSG_CHAIN_SYNC:
+		case MSG_REQUEST_CHAIN_SYNC:
 			peer.ChainSyncChannel <- peer.C
 		default:
 		}
