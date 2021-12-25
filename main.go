@@ -74,6 +74,7 @@ func run() error {
 				continue
 			}
 			util.GoChainLogger.Printf("Peer %s connected", conn.RemoteAddr().String())
+			// TODO: Should complete a handshake here
 			p := p2p.Peer{
 				C:                conn,
 				BlockChannel:     blockChannel,

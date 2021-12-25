@@ -15,7 +15,7 @@ const (
 )
 
 type Peer struct {
-	ID               string
+	ID               [32]byte
 	C                net.Conn
 	BlockChannel     chan block.Block
 	ChainSyncChannel chan net.Conn
