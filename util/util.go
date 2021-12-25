@@ -33,3 +33,24 @@ func SetDifficulty(difficultyIndex int) *big.Int {
 func HashData(buf []byte) [32]byte {
 	return sha256.Sum256(buf)
 }
+
+func CompareUnboundedByteSlices(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func CompareSize32ByteSlices(a, b [32]byte) bool {
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}

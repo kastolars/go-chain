@@ -8,28 +8,19 @@ import (
 	"time"
 
 	"go-chain/block"
+	"go-chain/p2p"
 	"go-chain/util"
 )
 
 var logger *log.Logger = log.New(os.Stdout, "LOG: ", log.Lmicroseconds|log.Lshortfile)
 
-func p2p() error {
+func run() error {
 	port := os.Args[1]
 	peers := make([]net.Conn, 0)
 	newBlockChannel := make(chan block.Block)
 
-	peerHandler := func(c net.Conn) {
-		for {
-			buf := make([]byte, 512)
-			if _, err := c.Read(buf); err != nil {
-				logger.Println("Failed to read from peer: " + err.Error())
-				c.Close()
-				return
-			}
-			block := block.Deserialize(buf)
-			newBlockChannel <- block
-		}
-	}
+	// Reads from peer
+	peerHandler := p2p.HandlePeer
 
 	if len(os.Args) > 2 {
 		// First connect
@@ -37,7 +28,7 @@ func p2p() error {
 		if conn, err := net.Dial("tcp", peerAddr); err == nil {
 			logger.Println("Successfully connected to " + peerAddr)
 			peers = append(peers, conn)
-			go peerHandler(conn)
+			go peerHandler(conn, newBlockChannel)
 		} else {
 			logger.Println("Unable to connect to peer: ", peerAddr)
 		}
@@ -60,7 +51,7 @@ func p2p() error {
 			}
 			logger.Printf("Peer %s connected", conn.RemoteAddr().String())
 			peers = append(peers, conn)
-			go peerHandler(conn)
+			go peerHandler(conn, newBlockChannel)
 		}
 	}()
 
@@ -99,7 +90,9 @@ func p2p() error {
 			block := block.NewBlock(previousHash, someRandomData, bitshift, nonce)
 			blockHash := block.Header.Hash()
 			valueDifference := util.CompareBigInt(blockHash, difficultyBigInt)
-			if valueDifference < 0 {
+			if valueDifference >= 0 {
+				nonce++
+			} else {
 
 				// Append to blockchain
 				blockchain = append(blockchain, block)
@@ -115,20 +108,18 @@ func p2p() error {
 
 				// Distribute to peers
 				for _, peer := range peers {
-					blockBuf := block.Header.Serialize()
+					blockBuf := block.Serialize()
 					if _, err := peer.Write(blockBuf); err != nil {
 						logger.Println("Failed to send block to peer: " + err.Error())
 					}
 				}
 
 				logger.Printf("Block #%d, %s mined in %f seconds", len(blockchain), hex.EncodeToString(blockHash[:]), elapsed/1000000000.0)
-			} else {
-				nonce++
 			}
 		}
 	}
 }
 
 func main() {
-	p2p()
+	run()
 }

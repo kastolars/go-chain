@@ -16,6 +16,8 @@ const (
 	NONCE_BYTES_LEN     = 8
 )
 
+const BLOCK_HEADER_LEN = TIMESTAMP_BYTES_LEN + PREV_HASH_BYTES_LEN + DATA_HASH_BYTES_LEN + BITSHIFT_BYTES_LEN + NONCE_BYTES_LEN
+
 type BlockHeader struct {
 	Timestamp    int64
 	PreviousHash [32]byte
@@ -30,8 +32,7 @@ type Block struct {
 }
 
 func (b BlockHeader) Serialize() []byte {
-	bufLen := TIMESTAMP_BYTES_LEN + PREV_HASH_BYTES_LEN + DATA_HASH_BYTES_LEN + BITSHIFT_BYTES_LEN + NONCE_BYTES_LEN
-	buf := make([]byte, bufLen)
+	buf := make([]byte, BLOCK_HEADER_LEN)
 
 	// Timestamp
 	binary.BigEndian.PutUint64(buf[:TIMESTAMP_BYTES_LEN], uint64(b.Timestamp))
@@ -44,7 +45,7 @@ func (b BlockHeader) Serialize() []byte {
 	currPos += copy(buf[currPos:currPos+DATA_HASH_BYTES_LEN], b.DataHash[:])
 
 	// Bit Shift
-	buf[currPos+BITSHIFT_BYTES_LEN] = b.BitShift
+	buf[currPos] = b.BitShift
 	currPos += BITSHIFT_BYTES_LEN
 
 	// Nonce
@@ -53,29 +54,35 @@ func (b BlockHeader) Serialize() []byte {
 	return buf
 }
 
-func Deserialize(buf []byte) Block {
+func (b Block) Serialize() []byte {
+	serializedBlockHeader := b.Header.Serialize()
+	dataLen := len(b.Data)
+	dataLenBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(dataLenBuf, uint16(dataLen))
+	serializedBlock := append(serializedBlockHeader, dataLenBuf...)
+	return append(serializedBlock, b.Data...)
+}
+
+func Deserialize(blockHeaderBuf []byte, dataBuf []byte) Block {
 	// Timestamp
-	timestamp := int64(binary.BigEndian.Uint64(buf[:TIMESTAMP_BYTES_LEN]))
+	timestamp := int64(binary.BigEndian.Uint64(blockHeaderBuf[:TIMESTAMP_BYTES_LEN]))
 	currPos := TIMESTAMP_BYTES_LEN
 
 	// Previous hash
 	previousHash := new([32]byte)
-	currPos += copy(previousHash[:], buf[currPos:currPos+PREV_HASH_BYTES_LEN])
+	currPos += copy(previousHash[:], blockHeaderBuf[currPos:currPos+PREV_HASH_BYTES_LEN])
 
 	// Data hash
 	dataHash := new([32]byte)
-	currPos += copy(dataHash[:], buf[currPos:currPos+DATA_HASH_BYTES_LEN])
+	currPos += copy(dataHash[:], blockHeaderBuf[currPos:currPos+DATA_HASH_BYTES_LEN])
 
 	// Bitshift
-	bitshift := uint8(buf[currPos+BITSHIFT_BYTES_LEN])
+	bitshift := uint8(blockHeaderBuf[currPos])
 	currPos += BITSHIFT_BYTES_LEN
 
 	// Nonce
-	nonce := binary.BigEndian.Uint64(buf[currPos : currPos+NONCE_BYTES_LEN])
+	nonce := binary.BigEndian.Uint64(blockHeaderBuf[currPos : currPos+NONCE_BYTES_LEN])
 	currPos += NONCE_BYTES_LEN
-
-	// Data
-	data := buf[currPos:]
 
 	return Block{
 		Header: BlockHeader{
@@ -85,7 +92,7 @@ func Deserialize(buf []byte) Block {
 			BitShift:     bitshift,
 			Nonce:        nonce,
 		},
-		Data: data,
+		Data: dataBuf,
 	}
 
 }
@@ -109,7 +116,7 @@ func NewBlock(previousHash [32]byte, data []byte, bitshift uint8, nonce uint64) 
 	}
 }
 
-func validateBlock(candidate Block, previousHash [32]byte, bitshift uint8, difficultyBigInt *big.Int) bool {
+func ValidateBlock(candidate Block, previousHash [32]byte, bitshift uint8, difficultyBigInt *big.Int) bool {
 	// Timestamp
 	if candidate.Header.Timestamp >= time.Now().UnixNano() {
 		return false
