@@ -1,184 +1,22 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"log"
-	"math/big"
 	"net"
 	"os"
 	"time"
-)
 
-const (
-	TIMESTAMP_BYTES_LEN = 8
-	PREV_HASH_BYTES_LEN = 32
-	DATA_HASH_BYTES_LEN = 32
-	BITSHIFT_BYTES_LEN  = 1
-	NONCE_BYTES_LEN     = 8
+	"go-chain/block"
+	"go-chain/util"
 )
 
 var logger *log.Logger = log.New(os.Stdout, "LOG: ", log.Lmicroseconds|log.Lshortfile)
 
-type blockHeader struct {
-	Timestamp    int64
-	PreviousHash [32]byte
-	DataHash     [32]byte
-	BitShift     uint8
-	Nonce        uint64
-}
-
-type block struct {
-	blockHeader
-	Data []byte
-}
-
-func hashData(buf []byte) [32]byte {
-	return sha256.Sum256(buf)
-}
-
-func (b blockHeader) serialize() []byte {
-	bufLen := TIMESTAMP_BYTES_LEN + PREV_HASH_BYTES_LEN + DATA_HASH_BYTES_LEN + BITSHIFT_BYTES_LEN + NONCE_BYTES_LEN
-	buf := make([]byte, bufLen)
-
-	// Timestamp
-	binary.BigEndian.PutUint64(buf[:TIMESTAMP_BYTES_LEN], uint64(b.Timestamp))
-	currPos := TIMESTAMP_BYTES_LEN
-
-	// Previous Hash
-	currPos += copy(buf[currPos:currPos+PREV_HASH_BYTES_LEN], b.PreviousHash[:])
-
-	// Data Hash
-	currPos += copy(buf[currPos:currPos+DATA_HASH_BYTES_LEN], b.DataHash[:])
-
-	// Bit Shift
-	buf[currPos+BITSHIFT_BYTES_LEN] = b.BitShift
-	currPos += BITSHIFT_BYTES_LEN
-
-	// Nonce
-	binary.BigEndian.PutUint64(buf[currPos:], b.Nonce)
-
-	return buf
-}
-
-func deserialize(buf []byte) block {
-	// Timestamp
-	timestamp := int64(binary.BigEndian.Uint64(buf[:TIMESTAMP_BYTES_LEN]))
-	currPos := TIMESTAMP_BYTES_LEN
-
-	// Previous hash
-	previousHash := new([32]byte)
-	currPos += copy(previousHash[:], buf[currPos:currPos+PREV_HASH_BYTES_LEN])
-
-	// Data hash
-	dataHash := new([32]byte)
-	currPos += copy(dataHash[:], buf[currPos:currPos+DATA_HASH_BYTES_LEN])
-
-	// Bitshift
-	bitshift := uint8(buf[currPos+BITSHIFT_BYTES_LEN])
-	currPos += BITSHIFT_BYTES_LEN
-
-	// Nonce
-	nonce := binary.BigEndian.Uint64(buf[currPos : currPos+NONCE_BYTES_LEN])
-	currPos += NONCE_BYTES_LEN
-
-	// Data
-	data := buf[currPos:]
-
-	return block{
-		blockHeader: blockHeader{
-			Timestamp:    timestamp,
-			PreviousHash: *previousHash,
-			DataHash:     *dataHash,
-			BitShift:     bitshift,
-			Nonce:        nonce,
-		},
-		Data: data,
-	}
-
-}
-
-func (b blockHeader) hash() [32]byte {
-	buf := b.serialize()
-	return hashData(buf)
-}
-
-func newBlock(previousHash [32]byte, data []byte, bitshift uint8, nonce uint64) block {
-	dataHash := hashData(data)
-	return block{
-		blockHeader: blockHeader{
-			Timestamp:    time.Now().Unix(),
-			PreviousHash: previousHash,
-			DataHash:     dataHash,
-			BitShift:     bitshift,
-			Nonce:        nonce,
-		},
-		Data: data,
-	}
-}
-
-func compareBigInt(hash [32]byte, difficulty *big.Int) int {
-	z := new(big.Int)
-	z.SetBytes(hash[:])
-	return z.Cmp(difficulty)
-}
-
-func setDifficulty(difficultyIndex int) *big.Int {
-	difficulty := new(big.Int)
-	difficultyBytes := new([32]byte)
-	difficultyBytes[difficultyIndex] = 1
-	difficulty.SetBytes((*difficultyBytes)[:])
-	return difficulty
-}
-
-func calculateDifficulty(bitShift uint8) *big.Int {
-	difficultyBytes := new([32]byte)
-	difficultyBytes[0] = 1
-
-	difficulty := new(big.Int)
-	difficulty.SetBytes((*difficultyBytes)[:])
-	difficulty.Rsh(difficulty, uint(bitShift))
-
-	return difficulty
-}
-
-func validateBlock(candidate block, previousHash [32]byte, bitshift uint8, difficultyBigInt *big.Int) bool {
-	// Timestamp
-	if candidate.blockHeader.Timestamp >= time.Now().UnixNano() {
-		return false
-	}
-
-	// Previous hash
-	if candidate.blockHeader.PreviousHash != previousHash {
-		return false
-	}
-
-	// Data hash
-	dataHash := hashData(candidate.Data)
-	if candidate.blockHeader.DataHash != dataHash {
-		return false
-	}
-
-	// Bit shift
-	if candidate.blockHeader.BitShift != bitshift {
-		return false
-	}
-
-	// Compare hash to difficulty
-	blockHash := candidate.blockHeader.hash()
-	valueDifference := compareBigInt(blockHash, difficultyBigInt)
-	if valueDifference >= 0 {
-		return false
-	}
-
-	return true
-}
-
 func p2p() error {
 	port := os.Args[1]
 	peers := make([]net.Conn, 0)
-	newBlockChannel := make(chan block)
+	newBlockChannel := make(chan block.Block)
 
 	peerHandler := func(c net.Conn) {
 		for {
@@ -188,7 +26,7 @@ func p2p() error {
 				c.Close()
 				return
 			}
-			block := deserialize(buf)
+			block := block.Deserialize(buf)
 			newBlockChannel <- block
 		}
 	}
@@ -226,15 +64,15 @@ func p2p() error {
 		}
 	}()
 
-	// Create genesis Block
+	// Random data we're going to use
 	someRandomData := []byte("Let's Go!")
 
 	// Create the difficultyBigInt
 	var bitshift uint8 = 16
-	difficultyBigInt := calculateDifficulty(bitshift) // [0, 32)
+	difficultyBigInt := util.CalculateDifficulty(bitshift) // [0, 32)
 
 	// Initialize the  blockchain in memory
-	blockchain := []block{}
+	blockchain := []block.Block{}
 
 	// Start mining
 	logger.Println("Mining...")
@@ -244,7 +82,7 @@ func p2p() error {
 	for {
 		select {
 		case candidateBlock := <-newBlockChannel:
-			blockHash := candidateBlock.blockHeader.hash()
+			blockHash := candidateBlock.Header.Hash()
 			// TODO: Validate that block is good
 
 			// Append to blockchain
@@ -258,9 +96,9 @@ func p2p() error {
 			logger.Printf("Block #%d, %s received", len(blockchain), hex.EncodeToString(blockHash[:]))
 
 		default:
-			block := newBlock(previousHash, someRandomData, bitshift, nonce)
-			blockHash := block.hash()
-			valueDifference := compareBigInt(blockHash, difficultyBigInt)
+			block := block.NewBlock(previousHash, someRandomData, bitshift, nonce)
+			blockHash := block.Header.Hash()
+			valueDifference := util.CompareBigInt(blockHash, difficultyBigInt)
 			if valueDifference < 0 {
 
 				// Append to blockchain
@@ -277,7 +115,7 @@ func p2p() error {
 
 				// Distribute to peers
 				for _, peer := range peers {
-					blockBuf := block.serialize()
+					blockBuf := block.Header.Serialize()
 					if _, err := peer.Write(blockBuf); err != nil {
 						logger.Println("Failed to send block to peer: " + err.Error())
 					}
