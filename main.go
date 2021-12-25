@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/hex"
-	"log"
 	"net"
 	"os"
 	"time"
@@ -12,12 +11,11 @@ import (
 	"go-chain/util"
 )
 
-var logger *log.Logger = log.New(os.Stdout, "LOG: ", log.Lmicroseconds|log.Lshortfile)
-
 func run() error {
 	port := os.Args[1]
 	peers := make([]net.Conn, 0)
-	newBlockChannel := make(chan block.Block)
+	blockChannel := make(chan block.Block)
+	chainSyncChannel := make(chan net.Conn)
 
 	// Reads from peer
 	peerHandler := p2p.HandlePeer
@@ -26,11 +24,20 @@ func run() error {
 		// First connect
 		peerAddr := os.Args[2]
 		if conn, err := net.Dial("tcp", peerAddr); err == nil {
-			logger.Println("Successfully connected to " + peerAddr)
+			util.GoChainLogger.Println("Successfully connected to " + peerAddr)
 			peers = append(peers, conn)
-			go peerHandler(conn, newBlockChannel)
+			p := p2p.Peer{
+				C:                conn,
+				BlockChannel:     blockChannel,
+				ChainSyncChannel: chainSyncChannel,
+			}
+			if err := p2p.SendChainSync(conn); err != nil {
+				conn.Close()
+			} else {
+				go peerHandler(p)
+			}
 		} else {
-			logger.Println("Unable to connect to peer: ", peerAddr)
+			util.GoChainLogger.Println("Unable to connect to peer: ", peerAddr)
 		}
 	}
 
@@ -41,7 +48,7 @@ func run() error {
 	}
 	defer listener.Close()
 
-	logger.Println("Listening on port 8331...")
+	util.GoChainLogger.Println("Listening on port 8331...")
 
 	go func() {
 		for {
@@ -49,9 +56,14 @@ func run() error {
 			if err != nil {
 				continue
 			}
-			logger.Printf("Peer %s connected", conn.RemoteAddr().String())
+			util.GoChainLogger.Printf("Peer %s connected", conn.RemoteAddr().String())
 			peers = append(peers, conn)
-			go peerHandler(conn, newBlockChannel)
+			p := p2p.Peer{
+				C:                conn,
+				BlockChannel:     blockChannel,
+				ChainSyncChannel: chainSyncChannel,
+			}
+			go peerHandler(p)
 		}
 	}()
 
@@ -59,20 +71,26 @@ func run() error {
 	someRandomData := []byte("Let's Go!")
 
 	// Create the difficultyBigInt
-	var bitshift uint8 = 16
+	var bitshift uint8 = 17
 	difficultyBigInt := util.CalculateDifficulty(bitshift) // [0, 32)
 
 	// Initialize the  blockchain in memory
 	blockchain := []block.Block{}
 
 	// Start mining
-	logger.Println("Mining...")
+	util.GoChainLogger.Println("Mining...")
 	previousHash := *new([32]byte)
 	var nonce uint64 = 0
 	start := time.Now().UnixNano()
 	for {
 		select {
-		case candidateBlock := <-newBlockChannel:
+		case unsyncdPeer := <-chainSyncChannel:
+			for _, block := range blockchain {
+				if err := p2p.SendBlock(unsyncdPeer, block); err != nil {
+					util.GoChainLogger.Println("Failed to send block to peer: " + err.Error())
+				}
+			}
+		case candidateBlock := <-blockChannel:
 			blockHash := candidateBlock.Header.Hash()
 			// TODO: Validate that block is good
 
@@ -84,18 +102,22 @@ func run() error {
 			nonce = 0
 			start = time.Now().UnixNano()
 
-			logger.Printf("Block #%d, %s received", len(blockchain), hex.EncodeToString(blockHash[:]))
+			util.GoChainLogger.Printf("Block #%d, %s received", len(blockchain), hex.EncodeToString(blockHash[:]))
 
 		default:
-			block := block.NewBlock(previousHash, someRandomData, bitshift, nonce)
-			blockHash := block.Header.Hash()
+
+			// Attempt to mine a newBlock here
+			newBlock := block.NewBlock(previousHash, someRandomData, bitshift, nonce)
+			blockHash := newBlock.Header.Hash()
 			valueDifference := util.CompareBigInt(blockHash, difficultyBigInt)
+
 			if valueDifference >= 0 {
+				// Retry
 				nonce++
 			} else {
 
 				// Append to blockchain
-				blockchain = append(blockchain, block)
+				blockchain = append(blockchain, newBlock)
 
 				// Metrics
 				end := time.Now().UnixNano()
@@ -108,13 +130,12 @@ func run() error {
 
 				// Distribute to peers
 				for _, peer := range peers {
-					blockBuf := block.Serialize()
-					if _, err := peer.Write(blockBuf); err != nil {
-						logger.Println("Failed to send block to peer: " + err.Error())
+					if err := p2p.SendBlock(peer, newBlock); err != nil {
+						util.GoChainLogger.Println("Failed to send block to peer: " + err.Error())
 					}
 				}
 
-				logger.Printf("Block #%d, %s mined in %f seconds", len(blockchain), hex.EncodeToString(blockHash[:]), elapsed/1000000000.0)
+				util.GoChainLogger.Printf("Block #%d, %s mined in %f seconds", len(blockchain), hex.EncodeToString(blockHash[:]), elapsed/1000000000.0)
 			}
 		}
 	}

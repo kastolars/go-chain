@@ -2,8 +2,12 @@ package util
 
 import (
 	"crypto/sha256"
+	"log"
 	"math/big"
+	"os"
 )
+
+var GoChainLogger *log.Logger = log.New(os.Stdout, "LOG: ", log.Lmicroseconds|log.Lshortfile)
 
 func CalculateDifficulty(bitShift uint8) *big.Int {
 	difficultyBytes := new([32]byte)
