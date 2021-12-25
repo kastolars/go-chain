@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/hex"
+	"math/rand"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"go-chain/block"
@@ -12,10 +14,22 @@ import (
 )
 
 func run() error {
+	// Post
 	port := os.Args[1]
-	peers := make([]net.Conn, 0)
+
+	// Collection of peers
+	peers := make([]p2p.Peer, 0)
+
+	// Thread synchronization
+	peersLock := sync.Mutex{}
 	blockChannel := make(chan block.Block)
 	chainSyncChannel := make(chan net.Conn)
+
+	// Create a peer id
+	myPeerId := make([]byte, 32)
+	rand.Seed(time.Now().UnixNano())
+	rand.Read(myPeerId)
+	util.GoChainLogger.Println("My peer id is: " + hex.EncodeToString(myPeerId))
 
 	// Reads from peer
 	peerHandler := p2p.HandlePeer
@@ -25,16 +39,19 @@ func run() error {
 		peerAddr := os.Args[2]
 		if conn, err := net.Dial("tcp", peerAddr); err == nil {
 			util.GoChainLogger.Println("Successfully connected to " + peerAddr)
-			peers = append(peers, conn)
 			p := p2p.Peer{
 				C:                conn,
 				BlockChannel:     blockChannel,
 				ChainSyncChannel: chainSyncChannel,
 			}
+			peers = append(peers, p)
+
+			// Sync chains
+			// TODO: Chain sync must be synchronous
 			if err := p2p.SendChainSync(conn); err != nil {
 				conn.Close()
 			} else {
-				go peerHandler(p)
+				go peerHandler(p, peers, &peersLock)
 			}
 		} else {
 			util.GoChainLogger.Println("Unable to connect to peer: ", peerAddr)
@@ -57,13 +74,13 @@ func run() error {
 				continue
 			}
 			util.GoChainLogger.Printf("Peer %s connected", conn.RemoteAddr().String())
-			peers = append(peers, conn)
 			p := p2p.Peer{
 				C:                conn,
 				BlockChannel:     blockChannel,
 				ChainSyncChannel: chainSyncChannel,
 			}
-			go peerHandler(p)
+			peers = append(peers, p)
+			go peerHandler(p, peers, &peersLock)
 		}
 	}()
 
@@ -130,7 +147,7 @@ func run() error {
 
 				// Distribute to peers
 				for _, peer := range peers {
-					if err := p2p.SendBlock(peer, newBlock); err != nil {
+					if err := p2p.SendBlock(peer.C, newBlock); err != nil {
 						util.GoChainLogger.Println("Failed to send block to peer: " + err.Error())
 					}
 				}

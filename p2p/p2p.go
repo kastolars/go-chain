@@ -5,14 +5,17 @@ import (
 	"go-chain/block"
 	"go-chain/util"
 	"net"
+	"sync"
 )
 
 const (
+	MSG_HANDSHAKE  = 0
 	MSG_BLOCK      = 1
 	MSG_CHAIN_SYNC = 2
 )
 
 type Peer struct {
+	ID               string
 	C                net.Conn
 	BlockChannel     chan block.Block
 	ChainSyncChannel chan net.Conn
@@ -22,18 +25,14 @@ func SendBlock(conn net.Conn, bl block.Block) error {
 	messageBuf := []byte{MSG_BLOCK}
 	blockBuf := bl.Serialize()
 	messageBuf = append(messageBuf, blockBuf...)
-	if _, err := conn.Write(messageBuf); err != nil {
-		return err
-	}
-	return nil
+	_, err := conn.Write(messageBuf)
+	return err
 }
 
 func SendChainSync(conn net.Conn) error {
 	messageBuf := []byte{MSG_CHAIN_SYNC}
-	if _, err := conn.Write(messageBuf); err != nil {
-		return err
-	}
-	return nil
+	_, err := conn.Write(messageBuf)
+	return err
 }
 
 func handleBlock(c net.Conn, blockChannel chan block.Block) error {
@@ -55,9 +54,19 @@ func handleBlock(c net.Conn, blockChannel chan block.Block) error {
 	return nil
 }
 
-func HandlePeer(peer Peer) {
-	// TODO: defer removal from peer collection
-	defer peer.C.Close()
+func HandlePeer(peer Peer, peers []Peer, peersLock *sync.Mutex) {
+	defer func() {
+		for i, p := range peers {
+			if p.C.RemoteAddr().String() == peer.C.RemoteAddr().String() {
+				peersLock.Lock()
+				peers = append(peers[:i], peers[i+1:]...)
+				peersLock.Unlock()
+				break
+			}
+		}
+		peer.C.Close()
+	}()
+
 	for {
 		messageTypeBuf := make([]byte, 1)
 		if _, err := peer.C.Read(messageTypeBuf); err != nil {
